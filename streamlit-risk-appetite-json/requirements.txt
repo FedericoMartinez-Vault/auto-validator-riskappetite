@@ -1,0 +1,10 @@
+streamlit
+python-dotenv
+pandas
+azure-identity
+azure-ai-projects
+azure-ai-agents
+pydantic
+tenacity
+jsonschema
+rich

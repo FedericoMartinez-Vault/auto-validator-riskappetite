@@ -1,0 +1,9 @@
+azure-ai-projects
+azure-ai-agents
+azure-identity
+python-dotenv
+pandas
+tqdm
+tenacity
+python-docx
+matplotlib
