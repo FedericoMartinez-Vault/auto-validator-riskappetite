@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+deploy/*.pem
+deploy/*.pem.txt
+.pem
