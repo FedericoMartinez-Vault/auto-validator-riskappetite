@@ -5,4 +5,6 @@ __pycache__/
 .streamlit/secrets.toml
 deploy/*.pem
 deploy/*.pem.txt
-.pem
+deploy/app-bundle.tar.gz
+deploy/app-bundle.b64
+*.tar.gz

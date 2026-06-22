@@ -7,7 +7,11 @@ import os
 from typing import Any
 
 from azure.ai.projects import AIProjectClient
-from azure.identity import ClientSecretCredential, DefaultAzureCredential
+from azure.identity import (
+    ClientSecretCredential,
+    DefaultAzureCredential,
+    ManagedIdentityCredential,
+)
 from dotenv import load_dotenv
 
 from src.utils import extract_json_object
@@ -51,18 +55,33 @@ class FoundryAgentClient:
 
     @staticmethod
     def _build_credential():
-        use_cli = os.getenv("USE_AZURE_CLI_AUTH", "true").strip().lower() in {"1", "true", "yes"}
+        """Prefer service principal on servers; fall back to managed identity or az login."""
         tenant_id = os.getenv("AZURE_TENANT_ID", "").strip()
         client_id = os.getenv("AZURE_CLIENT_ID", "").strip()
         client_secret = os.getenv("AZURE_CLIENT_SECRET", "").strip()
 
-        if not use_cli and tenant_id and client_id and client_secret:
+        if tenant_id and client_id and client_secret:
             return ClientSecretCredential(
                 tenant_id=tenant_id,
                 client_id=client_id,
                 client_secret=client_secret,
             )
-        return DefaultAzureCredential()
+
+        use_managed = os.getenv("USE_MANAGED_IDENTITY", "").strip().lower() in {"1", "true", "yes"}
+        if use_managed:
+            return ManagedIdentityCredential(client_id=client_id or None)
+
+        use_cli = os.getenv("USE_AZURE_CLI_AUTH", "true").strip().lower() in {"1", "true", "yes"}
+        if use_cli:
+            return DefaultAzureCredential(
+                exclude_interactive_browser_credential=True,
+                exclude_visual_studio_code_credential=True,
+            )
+
+        raise ValueError(
+            "No Azure credentials configured. Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and "
+            "AZURE_CLIENT_SECRET, or USE_MANAGED_IDENTITY=true, or USE_AZURE_CLI_AUTH=true."
+        )
 
     def find_agent(self, candidate_names: list[str] | None = None) -> dict[str, str]:
         """List existing agents and return the first match by name."""

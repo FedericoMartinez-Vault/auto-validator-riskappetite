@@ -35,7 +35,13 @@ Set at minimum:
 - `FOUNDRY_PROJECT_ENDPOINT` – your Azure AI Foundry project endpoint
 - `FOUNDRY_AGENT_NAME` – defaults to `AF-UW-RiskApetite`
 
-Authentication uses `DefaultAzureCredential` after `az login` when `USE_AZURE_CLI_AUTH=true` (default). For service principal auth, set `USE_AZURE_CLI_AUTH=false` and provide `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET`.
+Authentication (pick one):
+
+1. **Local dev:** `az login`, then `USE_AZURE_CLI_AUTH=true` in `.env`
+2. **VM/server (recommended):** service principal in `.env` — `USE_AZURE_CLI_AUTH=false` plus `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`
+3. **VM managed identity:** grant `Azure AI Developer` on Foundry to the VM identity (`deploy/grant-vm-foundry-role.sh`), then `USE_MANAGED_IDENTITY=true`
+
+See `deploy/deploy.md` for Azure VM deployment.
 
 ## Run
 

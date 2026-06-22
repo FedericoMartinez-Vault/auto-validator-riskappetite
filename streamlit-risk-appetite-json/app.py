@@ -328,7 +328,7 @@ def _render_analysis_error(message: str) -> bool:
         unsafe_allow_html=True,
     )
     st.code(message, language="text")
-    return st.button("🔄 Reintentar análisis", type="primary", key="retry_analysis")
+    return st.button("🔄 Retry analysis", type="primary", key="retry_analysis")
 
 
 def _run_agent_with_live_timer(

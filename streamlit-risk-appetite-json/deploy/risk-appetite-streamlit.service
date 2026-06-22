@@ -1,0 +1,14 @@
+[Unit]
+Description=Risk Appetite Streamlit
+After=network.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/home/azureuser/apps/streamlit-risk-appetite-json
+EnvironmentFile=/home/azureuser/apps/streamlit-risk-appetite-json/.env
+ExecStart=/home/azureuser/apps/streamlit-risk-appetite-json/.venv/bin/streamlit run app.py --server.port 8502 --server.address 0.0.0.0 --server.headless true
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

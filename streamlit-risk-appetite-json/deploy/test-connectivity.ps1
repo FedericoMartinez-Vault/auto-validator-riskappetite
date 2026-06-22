@@ -2,7 +2,8 @@
 # Uso: powershell -File deploy/test-connectivity.ps1
 
 $PrivateIp = "10.72.64.196"
-$PublicIp  = "20.228.231.195"
+$PublicIp  = "20.51.166.193"
+$PrivateIp = "10.72.128.197"
 $Port      = 8502
 
 $Key = "$env:USERPROFILE\.ssh\vault-keys\AI_UAT.pem"

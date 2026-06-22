@@ -1,278 +1,124 @@
-# Despliegue — Risk Appetite Streamlit en VM UAT
+# Deployment — Streamlit Risk Appetite (Azure VM)
 
-Guía paso a paso para desplegar `streamlit-risk-appetite-json` en la VM UAT.
+## VM (DEV)
 
-| Dato | Valor |
-|------|--------|
-| VM | `10.72.64.196` |
-| Usuario | `azureuser` |
-| Puerto app | `8502` |
-| URL | `http://10.72.64.196:8502` |
-| Ruta en VM | `/home/azureuser/apps/streamlit-risk-appetite-json` |
-
-> No subas `.env` ni claves `.pem` al repositorio.
-
----
-
-## 0. Preparar la clave PEM en tu PC
-
-En **PowerShell**, desde la raíz del repo:
-
-```powershell
-cd C:\Users\FedericoMartinez\Desktop\Repos\auto-validator-riskappetite
-
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh\vault-keys" | Out-Null
-
-Copy-Item -Force `
-  "streamlit-risk-appetite-json\deploy\AI_UAT.pem.txt" `
-  "$env:USERPROFILE\.ssh\vault-keys\AI_UAT.pem"
-
-$KEY = "$env:USERPROFILE\.ssh\vault-keys\AI_UAT.pem"
-
-icacls $KEY /inheritance:r
-icacls $KEY /grant:r "$($env:USERNAME):(R)"
-```
+| | |
+|--|--|
+| VM | `VPSTREAMLIT-RISKAPP-01` |
+| Resource group | `AZR-DEV-DATA-VM-RG` |
+| Subscription | `VRMS Azure DEV Subscription` |
+| Private IP | `10.72.128.197` |
+| Public IP | `20.51.166.193` |
+| Port | `8502` |
+| URL (VPN) | `http://10.72.128.197:8502` |
+| SSH | `ssh azureuser@20.51.166.193 -i ~/.ssh/id_rsa` |
+| VM identity | `119a6e26-72c3-4852-8b69-5f1b7fdd3822` |
 
 ---
 
-## 1. Conectar por SSH
+## Foundry auth on the VM (required)
 
-```powershell
-ssh -o StrictHostKeyChecking=accept-new azureuser@10.72.64.196 -i $KEY
-```
+The app loads credentials from `.env` only — no browser login at runtime.
 
-Salir de la VM:
-
-```bash
-exit
-```
-
----
-
-## 2. Preparar la VM (primera vez)
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3 python3-venv python3-pip git rsync
-mkdir -p ~/apps
-
-sudo ufw allow OpenSSH
-sudo ufw allow 8502/tcp
-sudo ufw --force enable
-sudo ufw status
-```
-
-O ejecuta el script incluido (desde la carpeta del proyecto en la VM):
-
-```bash
-bash deploy/configure-firewall.sh
-```
-
-> `ufw inactive` solo afecta el firewall **local**. Para acceso **desde Internet** hace falta abrir el puerto **8502** en el **NSG de Azure** (ver sección 10).
-
----
-
-## 3. Copiar el proyecto desde tu PC a la VM
-
-En **PowerShell**:
-
-```powershell
-cd C:\Users\FedericoMartinez\Desktop\Repos\auto-validator-riskappetite
-$KEY = "$env:USERPROFILE\.ssh\vault-keys\AI_UAT.pem"
-
-scp -i $KEY -r `
-  streamlit-risk-appetite-json\app.py `
-  streamlit-risk-appetite-json\requirements.txt `
-  streamlit-risk-appetite-json\README.md `
-  streamlit-risk-appetite-json\src `
-  streamlit-risk-appetite-json\scripts `
-  streamlit-risk-appetite-json\.env.example `
-  azureuser@10.72.64.196:/home/azureuser/apps/streamlit-risk-appetite-json/
-```
-
-Si la carpeta destino no existe:
-
-```bash
-mkdir -p ~/apps/streamlit-risk-appetite-json
-```
-
----
-
-## 4. Configurar entorno en la VM
-
-```bash
-cd ~/apps/streamlit-risk-appetite-json
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
----
-
-## 5. Configurar `.env`
-
-```bash
-cd ~/apps/streamlit-risk-appetite-json
-cp .env.example .env
-nano .env
-```
-
-Ejemplo:
+**Option A — Service principal (recommended for servers)**
 
 ```env
+USE_AZURE_CLI_AUTH=false
+AZURE_TENANT_ID=<tenant-id>
+AZURE_CLIENT_ID=<app-id>
+AZURE_CLIENT_SECRET=<secret>
 FOUNDRY_PROJECT_ENDPOINT=https://azr-dev-foundry-af-1617.services.ai.azure.com/api/projects/azr-dev-proj-af-1617
 FOUNDRY_AGENT_NAME=AF-UW-RiskApetite
+```
+
+Redeploy: `.\deploy\azure-deploy.ps1` then `sudo systemctl restart risk-appetite-streamlit`
+
+**Option B — Managed identity**
+
+Ask infra to run (needs elevated Azure permissions):
+
+```bash
+bash deploy/grant-vm-foundry-role.sh
+```
+
+Then on the VM `.env`:
+
+```env
+USE_MANAGED_IDENTITY=true
 USE_AZURE_CLI_AUTH=false
-
-AZURE_TENANT_ID=<tu-tenant-id>
-AZURE_CLIENT_ID=<tu-client-id>
-AZURE_CLIENT_SECRET=<tu-client-secret>
+FOUNDRY_PROJECT_ENDPOINT=...
+FOUNDRY_AGENT_NAME=AF-UW-RiskApetite
 ```
+
+**Option C — One-time `az login` on the VM (dev/testing)**
+
+Inside VPN, as `azureuser`:
 
 ```bash
-chmod 600 .env
-```
-
----
-
-## 6. Prueba manual
-
-```bash
-cd ~/apps/streamlit-risk-appetite-json
-source .venv/bin/activate
-streamlit run app.py --server.port 8502 --server.address 0.0.0.0 --server.headless true
-```
-
-Abre en el navegador:
-
-```
-http://10.72.64.196:8502
-```
-
-Detén con `Ctrl+C` y continúa con el servicio systemd.
-
----
-
-## 7. Servicio systemd (arranque automático)
-
-```bash
-sudo nano /etc/systemd/system/risk-appetite-streamlit.service
-```
-
-Contenido:
-
-```ini
-[Unit]
-Description=Risk Appetite Streamlit (Metal JSON Intake)
-After=network.target
-
-[Service]
-Type=simple
-User=azureuser
-Group=azureuser
-WorkingDirectory=/home/azureuser/apps/streamlit-risk-appetite-json
-EnvironmentFile=/home/azureuser/apps/streamlit-risk-appetite-json/.env
-ExecStart=/home/azureuser/apps/streamlit-risk-appetite-json/.venv/bin/streamlit run app.py --server.port 8502 --server.address 0.0.0.0 --server.headless true
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable risk-appetite-streamlit
-sudo systemctl start risk-appetite-streamlit
-sudo systemctl status risk-appetite-streamlit
-```
-
-Logs:
-
-```bash
-journalctl -u risk-appetite-streamlit -f
-```
-
----
-
-## 8. Actualizar la app (re-deploy)
-
-En tu PC:
-
-```powershell
-cd C:\Users\FedericoMartinez\Desktop\Repos\auto-validator-riskappetite
-$KEY = "$env:USERPROFILE\.ssh\vault-keys\AI_UAT.pem"
-
-scp -i $KEY -r `
-  streamlit-risk-appetite-json\app.py `
-  streamlit-risk-appetite-json\requirements.txt `
-  streamlit-risk-appetite-json\src `
-  streamlit-risk-appetite-json\scripts `
-  azureuser@10.72.64.196:/home/azureuser/apps/streamlit-risk-appetite-json/
-```
-
-En la VM:
-
-```bash
-cd ~/apps/streamlit-risk-appetite-json
-source .venv/bin/activate
-pip install -r requirements.txt
+az login --use-device-code
 sudo systemctl restart risk-appetite-streamlit
-sudo systemctl status risk-appetite-streamlit
 ```
 
 ---
 
-## 9. Comandos útiles
-
-| Acción | Comando |
-|--------|---------|
-| Ver estado | `sudo systemctl status risk-appetite-streamlit` |
-| Reiniciar | `sudo systemctl restart risk-appetite-streamlit` |
-| Detener | `sudo systemctl stop risk-appetite-streamlit` |
-| Logs | `journalctl -u risk-appetite-streamlit -n 100 --no-pager` |
-
----
-
-## 10. Acceso externo (NSG Azure)
-
-La VM expone IP pública (ej. `20.228.231.195`). El ping puede funcionar pero el puerto **8502** queda bloqueado hasta crear regla NSG.
-
-Quien tenga permisos de red en Azure:
+## Provision VM (Azure CLI)
 
 ```bash
-# Sustituir <RESOURCE_GROUP> y <NSG_NAME> (preguntar a infra o ver en Portal → VM → Networking → Network security group)
-az network nsg rule create \
-  -g <RESOURCE_GROUP> \
-  --nsg-name <NSG_NAME> \
-  -n Allow-Streamlit-8502 \
-  --priority 310 \
-  --direction Inbound \
-  --access Allow \
-  --protocol Tcp \
-  --destination-port-ranges 8502 \
-  --source-address-prefixes Internet \
-  --destination-address-prefixes '*'
+az login
+az account set --subscription "VRMS Azure DEV Subscription"
+bash deploy/azure-provision.sh
 ```
 
-Probar desde tu PC:
+Creates NSG rules for **22** and **8502**, Ubuntu VM, SSH key at `~/.ssh/id_rsa`.
+
+---
+
+## Deploy / update app
 
 ```powershell
-powershell -File streamlit-risk-appetite-json\deploy\test-connectivity.ps1
+az login
+cd streamlit-risk-appetite-json
+# Ensure .env has service principal vars for the VM
+.\deploy\azure-deploy.ps1
 ```
 
-URL externa:
+Uses `az vm run-command` (no SSH required). Restarts `risk-appetite-streamlit` systemd unit.
 
-```
-http://20.228.231.195:8502
+---
+
+## UAT VM (`VPUATDATAAI01`)
+
+| | |
+|--|--|
+| Private IP | `10.72.64.196` |
+| Public IP | `20.228.231.195` |
+| App path | `~/apps/auto-validator-riskappetite/streamlit-risk-appetite-json` |
+
+SSH key: copy `deploy/AI_UAT.pem.txt` locally to `~/.ssh/vault-keys/AI_UAT.pem` (do not commit).
+
+Pending: NSG inbound rule **TCP 8502** in Azure Portal.
+
+---
+
+## Useful commands
+
+```bash
+az vm run-command invoke -g AZR-DEV-DATA-VM-RG -n VPSTREAMLIT-RISKAPP-01 \
+  --command-id RunShellScript \
+  --scripts "systemctl status risk-appetite-streamlit; ss -tlnp | grep 8502"
+
+az vm show -g AZR-DEV-DATA-VM-RG -n VPSTREAMLIT-RISKAPP-01 -d --query publicIps -o tsv
 ```
 
 ---
 
-## URL final
+## `deploy/` files
 
-```
-http://10.72.64.196:8502
-```
+| File | Purpose |
+|------|---------|
+| `azure-provision.sh` | Create VM + NSG |
+| `azure-deploy.ps1` | Upload app + restart service |
+| `grant-vm-foundry-role.sh` | Grant Foundry role to VM identity |
+| `configure-firewall.sh` | Enable ufw on VM |
+| `risk-appetite-streamlit.service` | systemd unit |
+| `test-connectivity.ps1` | Test ports from Windows |
