@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 
 from azure.ai.projects import AIProjectClient
+from azure.core.credentials import AccessToken, TokenCredential
 from azure.identity import (
+    AzureCliCredential,
     ClientSecretCredential,
-    DefaultAzureCredential,
     ManagedIdentityCredential,
 )
 from dotenv import load_dotenv
@@ -24,6 +26,21 @@ DEFAULT_AGENT_CANDIDATES = [
     "AF-UW-RiskApetite",
     "AF-UW-RiskAppetite",
 ]
+
+
+class _EnvAccessTokenCredential(TokenCredential):
+    """Use AZURE_ACCESS_TOKEN from .env (populated by deploy/sync-env-from-azure.ps1)."""
+
+    def __init__(self, token: str, expires_on: int) -> None:
+        self._token = token
+        self._expires_on = expires_on
+
+    def get_token(self, *scopes: str, **kwargs: Any) -> AccessToken:
+        if self._expires_on <= int(time.time()) + 60:
+            raise ValueError(
+                "AZURE_ACCESS_TOKEN has expired. Re-run deploy/sync-env-from-azure.ps1 -ForVm."
+            )
+        return AccessToken(self._token, self._expires_on)
 
 
 class FoundryAgentClient:
@@ -55,7 +72,14 @@ class FoundryAgentClient:
 
     @staticmethod
     def _build_credential():
-        """Prefer service principal on servers; fall back to managed identity or az login."""
+        """Token from deploy script, service principal, managed identity, or az login."""
+        access_token = os.getenv("AZURE_ACCESS_TOKEN", "").strip()
+        expires_raw = os.getenv("AZURE_TOKEN_EXPIRES_ON", "").strip()
+        if access_token and expires_raw.isdigit():
+            expires_on = int(expires_raw)
+            if expires_on > int(time.time()) + 60:
+                return _EnvAccessTokenCredential(access_token, expires_on)
+
         tenant_id = os.getenv("AZURE_TENANT_ID", "").strip()
         client_id = os.getenv("AZURE_CLIENT_ID", "").strip()
         client_secret = os.getenv("AZURE_CLIENT_SECRET", "").strip()
@@ -73,14 +97,12 @@ class FoundryAgentClient:
 
         use_cli = os.getenv("USE_AZURE_CLI_AUTH", "true").strip().lower() in {"1", "true", "yes"}
         if use_cli:
-            return DefaultAzureCredential(
-                exclude_interactive_browser_credential=True,
-                exclude_visual_studio_code_credential=True,
-            )
+            return AzureCliCredential()
 
         raise ValueError(
-            "No Azure credentials configured. Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and "
-            "AZURE_CLIENT_SECRET, or USE_MANAGED_IDENTITY=true, or USE_AZURE_CLI_AUTH=true."
+            "No Azure credentials configured. Run deploy/sync-env-from-azure.ps1, or set "
+            "AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET, USE_MANAGED_IDENTITY=true, "
+            "or USE_AZURE_CLI_AUTH=true."
         )
 
     def find_agent(self, candidate_names: list[str] | None = None) -> dict[str, str]:

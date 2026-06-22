@@ -7,9 +7,7 @@ $Rg = "AZR-DEV-DATA-VM-RG"
 $Vm = "VPSTREAMLIT-RISKAPP-01"
 $AppRoot = Split-Path $PSScriptRoot -Parent
 
-if (-not (Test-Path "$AppRoot\.env")) {
-    Write-Error ".env missing. Copy .env.example and set service principal credentials for the VM."
-}
+& "$PSScriptRoot\sync-env-from-azure.ps1" -ForVm -OutputPath "$AppRoot\.env"
 
 az account set --subscription $Subscription
 
@@ -38,8 +36,21 @@ cd /home/azureuser/apps/streamlit-risk-appetite-json
 sudo -u azureuser python3 -m venv .venv
 sudo -u azureuser .venv/bin/pip install -q --upgrade pip
 sudo -u azureuser .venv/bin/pip install -q -r requirements.txt
-[ -f .env ] && chmod 600 .env
 "@ -o none
+
+if (Test-Path "$AppRoot\.env") {
+    $envB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$AppRoot\.env"))
+    az vm run-command invoke -g $Rg -n $Vm --command-id RunShellScript --scripts "rm -f /tmp/env.b64" -o none
+    for ($i = 0; $i -lt $envB64.Length; $i += $chunkSize) {
+        $chunk = $envB64.Substring($i, [Math]::Min($chunkSize, $envB64.Length - $i))
+        az vm run-command invoke -g $Rg -n $Vm --command-id RunShellScript --scripts "echo '$chunk' >> /tmp/env.b64" -o none
+    }
+    az vm run-command invoke -g $Rg -n $Vm --command-id RunShellScript --scripts @"
+base64 -d /tmp/env.b64 > /home/azureuser/apps/streamlit-risk-appetite-json/.env
+chown azureuser:azureuser /home/azureuser/apps/streamlit-risk-appetite-json/.env
+chmod 600 /home/azureuser/apps/streamlit-risk-appetite-json/.env
+"@ -o none
+}
 
 $svcB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PSScriptRoot\risk-appetite-streamlit.service"))
 az vm run-command invoke -g $Rg -n $Vm --command-id RunShellScript --scripts @"
