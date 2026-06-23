@@ -37,12 +37,13 @@ Set at minimum:
 
 Authentication (pick one):
 
-1. **Local dev:** `az login`, then `.\deploy\sync-env-from-azure.ps1` (or `USE_AZURE_CLI_AUTH=true` in `.env`)
-2. **VM (current DEV):** `.\deploy\azure-deploy.ps1` — syncs a short-lived token from your `az login` into the VM `.env`
-3. **VM/server (production):** service principal — `USE_AZURE_CLI_AUTH=false` plus `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`
-4. **VM managed identity:** grant `Azure AI Developer` on Foundry (`deploy/grant-vm-foundry-role.sh`), then `USE_MANAGED_IDENTITY=true`
+1. **Local dev:** `az login`, then `.\deploy\sync-env-from-azure.ps1`
+2. **VM (permanent):** infra runs `grant-vm-foundry-role.sh` once → `.\deploy\azure-deploy.ps1` (managed identity, no token)
+3. **VM code updates:** `.\deploy\azure-deploy.ps1 -SkipEnvSync`
+4. **VM (legacy):** `.\deploy\azure-deploy.ps1 -AuthMode Token` until infra grants MI
+5. **Production:** service principal or Key Vault SP (`-AuthMode KeyVault`)
 
-See `deploy/deploy.md` for step-by-step VM deployment and token refresh.
+See `deploy/deploy.md` for details.
 
 ## Run
 

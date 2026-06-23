@@ -27,9 +27,12 @@ DEFAULT_AGENT_CANDIDATES = [
     "AF-UW-RiskAppetite",
 ]
 
+_KV_CLIENT_ID_SECRET = "KEY_VAULT_SP_CLIENT_ID_SECRET"
+_KV_CLIENT_SECRET_SECRET = "KEY_VAULT_SP_CLIENT_SECRET_SECRET"
+
 
 class _EnvAccessTokenCredential(TokenCredential):
-    """Use AZURE_ACCESS_TOKEN from .env (populated by deploy/sync-env-from-azure.ps1)."""
+    """Legacy: short-lived token from deploy/sync-env-from-azure.ps1 -AuthMode Token."""
 
     def __init__(self, token: str, expires_on: int) -> None:
         self._token = token
@@ -38,9 +41,58 @@ class _EnvAccessTokenCredential(TokenCredential):
     def get_token(self, *scopes: str, **kwargs: Any) -> AccessToken:
         if self._expires_on <= int(time.time()) + 60:
             raise ValueError(
-                "AZURE_ACCESS_TOKEN has expired. Re-run deploy/sync-env-from-azure.ps1 -ForVm."
+                "AZURE_ACCESS_TOKEN has expired. Use managed identity (-AuthMode ManagedIdentity) "
+                "or re-run deploy with -AuthMode Token."
             )
         return AccessToken(self._token, self._expires_on)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, str(default)).strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
+def _managed_identity_credential():
+    client_id = os.getenv("AZURE_CLIENT_ID", "").strip()
+    return ManagedIdentityCredential(client_id=client_id or None)
+
+
+def _load_keyvault_secret(vault_name: str, secret_name: str) -> str | None:
+    try:
+        from azure.keyvault.secrets import SecretClient
+    except ImportError as exc:
+        raise ValueError(
+            "azure-keyvault-secrets is required for Key Vault auth. "
+            "Run: pip install azure-keyvault-secrets"
+        ) from exc
+
+    vault_url = f"https://{vault_name}.vault.azure.net"
+    credential = _managed_identity_credential()
+    client = SecretClient(vault_url=vault_url, credential=credential)
+    try:
+        return client.get_secret(secret_name).value
+    except Exception as exc:
+        logger.warning("Key Vault secret %s not available: %s", secret_name, type(exc).__name__)
+        return None
+
+
+def _service_principal_from_keyvault(tenant_id: str) -> ClientSecretCredential | None:
+    vault_name = os.getenv("KEY_VAULT_NAME", "").strip()
+    if not vault_name or not tenant_id:
+        return None
+
+    client_id_secret = os.getenv(_KV_CLIENT_ID_SECRET, "foundry-sp-client-id").strip()
+    client_secret_secret = os.getenv(_KV_CLIENT_SECRET_SECRET, "foundry-sp-client-secret").strip()
+    client_id = _load_keyvault_secret(vault_name, client_id_secret)
+    client_secret = _load_keyvault_secret(vault_name, client_secret_secret)
+    if not client_id or not client_secret:
+        return None
+
+    return ClientSecretCredential(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
 
 
 class FoundryAgentClient:
@@ -72,17 +124,16 @@ class FoundryAgentClient:
 
     @staticmethod
     def _build_credential():
-        """Token from deploy script, service principal, managed identity, or az login."""
-        access_token = os.getenv("AZURE_ACCESS_TOKEN", "").strip()
-        expires_raw = os.getenv("AZURE_TOKEN_EXPIRES_ON", "").strip()
-        if access_token and expires_raw.isdigit():
-            expires_on = int(expires_raw)
-            if expires_on > int(time.time()) + 60:
-                return _EnvAccessTokenCredential(access_token, expires_on)
-
+        """Managed identity or SP (permanent on VM); token/CLI only for dev or legacy."""
         tenant_id = os.getenv("AZURE_TENANT_ID", "").strip()
         client_id = os.getenv("AZURE_CLIENT_ID", "").strip()
         client_secret = os.getenv("AZURE_CLIENT_SECRET", "").strip()
+
+        if _env_flag("USE_MANAGED_IDENTITY"):
+            kv_sp = _service_principal_from_keyvault(tenant_id)
+            if kv_sp is not None:
+                return kv_sp
+            return _managed_identity_credential()
 
         if tenant_id and client_id and client_secret:
             return ClientSecretCredential(
@@ -91,18 +142,24 @@ class FoundryAgentClient:
                 client_secret=client_secret,
             )
 
-        use_managed = os.getenv("USE_MANAGED_IDENTITY", "").strip().lower() in {"1", "true", "yes"}
-        if use_managed:
-            return ManagedIdentityCredential(client_id=client_id or None)
+        kv_sp = _service_principal_from_keyvault(tenant_id)
+        if kv_sp is not None:
+            return kv_sp
 
-        use_cli = os.getenv("USE_AZURE_CLI_AUTH", "true").strip().lower() in {"1", "true", "yes"}
-        if use_cli:
+        access_token = os.getenv("AZURE_ACCESS_TOKEN", "").strip()
+        expires_raw = os.getenv("AZURE_TOKEN_EXPIRES_ON", "").strip()
+        if access_token and expires_raw.isdigit():
+            expires_on = int(expires_raw)
+            if expires_on > int(time.time()) + 60:
+                return _EnvAccessTokenCredential(access_token, expires_on)
+
+        if _env_flag("USE_AZURE_CLI_AUTH", default=True):
             return AzureCliCredential()
 
         raise ValueError(
-            "No Azure credentials configured. Run deploy/sync-env-from-azure.ps1, or set "
-            "AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET, USE_MANAGED_IDENTITY=true, "
-            "or USE_AZURE_CLI_AUTH=true."
+            "No Azure credentials configured. For the VM use USE_MANAGED_IDENTITY=true "
+            "(run grant-vm-foundry-role.sh once), or set service principal vars, "
+            "or deploy with -AuthMode Token for temporary dev access."
         )
 
     def find_agent(self, candidate_names: list[str] | None = None) -> dict[str, str]:

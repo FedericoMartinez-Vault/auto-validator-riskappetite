@@ -1,7 +1,9 @@
 # Build .env from Azure CLI + Key Vault (run while logged in: az login)
 # Usage:
-#   .\sync-env-from-azure.ps1              # local dev (.env with az cli auth)
-#   .\sync-env-from-azure.ps1 -ForVm       # VM deploy (injects short-lived user token)
+#   .\sync-env-from-azure.ps1                                    # local dev
+#   .\sync-env-from-azure.ps1 -ForVm                             # VM: managed identity (permanent)
+#   .\sync-env-from-azure.ps1 -ForVm -AuthMode Token             # VM: short-lived user token (legacy)
+#   .\sync-env-from-azure.ps1 -ForVm -AuthMode KeyVault          # VM: MI + SP secrets from Key Vault
 
 param(
     [string]$Subscription = "VRMS Azure DEV Subscription",
@@ -11,7 +13,9 @@ param(
     [string]$FoundryProject = "azr-dev-proj-af-1617",
     [string]$AgentName = "AF-UW-RiskApetite",
     [string]$OutputPath = "",
-    [switch]$ForVm
+    [switch]$ForVm,
+    [ValidateSet("ManagedIdentity", "Token", "KeyVault")]
+    [string]$AuthMode = "ManagedIdentity"
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,15 +47,37 @@ $lines = @(
 )
 
 if ($ForVm) {
-    $tokenJson = az account get-access-token --resource "https://ai.azure.com" -o json | ConvertFrom-Json
-    $expiresOn = [DateTimeOffset]::Parse($tokenJson.expiresOn).ToUnixTimeSeconds()
-    $lines += @(
-        "USE_AZURE_CLI_AUTH=false",
-        "USE_MANAGED_IDENTITY=false",
-        "AZURE_ACCESS_TOKEN=$($tokenJson.accessToken)",
-        "AZURE_TOKEN_EXPIRES_ON=$expiresOn"
-    )
-    Write-Host "VM .env: injected access token (expires $($tokenJson.expiresOn)). Re-run this script or redeploy to refresh."
+    switch ($AuthMode) {
+        "Token" {
+            $tokenJson = az account get-access-token --resource "https://ai.azure.com" -o json | ConvertFrom-Json
+            $expiresOn = [DateTimeOffset]::Parse($tokenJson.expiresOn).ToUnixTimeSeconds()
+            $lines += @(
+                "USE_AZURE_CLI_AUTH=false",
+                "USE_MANAGED_IDENTITY=false",
+                "AZURE_ACCESS_TOKEN=$($tokenJson.accessToken)",
+                "AZURE_TOKEN_EXPIRES_ON=$expiresOn"
+            )
+            Write-Host "VM .env: short-lived token (expires $($tokenJson.expiresOn)). Use -AuthMode ManagedIdentity for permanent auth."
+        }
+        "KeyVault" {
+            $lines += @(
+                "USE_AZURE_CLI_AUTH=false",
+                "USE_MANAGED_IDENTITY=true",
+                "KEY_VAULT_NAME=$KeyVaultName",
+                "KEY_VAULT_SP_CLIENT_ID_SECRET=foundry-sp-client-id",
+                "KEY_VAULT_SP_CLIENT_SECRET_SECRET=foundry-sp-client-secret"
+            )
+            Write-Host "VM .env: managed identity + Key Vault SP secrets (no expiring token)."
+            Write-Host "Infra must run grant-vm-foundry-role.sh and grant-vm-keyvault-role.sh, and store SP secrets in Key Vault."
+        }
+        default {
+            $lines += @(
+                "USE_AZURE_CLI_AUTH=false",
+                "USE_MANAGED_IDENTITY=true"
+            )
+            Write-Host "VM .env: managed identity (permanent). Infra must run grant-vm-foundry-role.sh once."
+        }
+    }
 } else {
     $lines += @(
         "USE_AZURE_CLI_AUTH=true",

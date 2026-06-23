@@ -22,9 +22,8 @@
 2. **Deployed the app** with `deploy/azure-deploy.ps1` via `az vm run-command` (no SSH required).
 3. **Configured systemd** service `risk-appetite-streamlit` listening on `0.0.0.0:8502`.
 4. **Hit a Foundry auth blocker:** the VM managed identity does not have `Azure AI Developer` on the Foundry project, and we could not create a service principal or assign roles with the current Azure AD permissions.
-5. **Workaround implemented:** `deploy/sync-env-from-azure.ps1` pulls Foundry settings and a short-lived **user access token** from your local `az login` session and writes them into `.env` on the VM during deploy.
-6. **Updated the app client** (`src/foundry_agent_client.py`) to use `AZURE_ACCESS_TOKEN` from `.env` instead of the VM managed identity (which was being picked up incorrectly and failing with `agents/read` permission errors).
-7. **Fixed `.env` upload:** `azure-deploy.ps1` now uploads `.env` separately (base64 chunks) because bundling it inside the tar was truncating the file.
+5. **Workaround (legacy):** `-AuthMode Token` injects a short-lived user token (~1 hour). Use only until infra grants the VM managed identity.
+6. **Permanent fix:** `USE_MANAGED_IDENTITY=true` — VM gets tokens from Azure automatically after `grant-vm-foundry-role.sh` (one-time).
 
 ---
 
@@ -32,66 +31,66 @@
 
 The app loads credentials from `.env` only — no browser login at runtime.
 
-### Option A — Automated token from `az login` (current DEV setup)
+### Option A — Managed identity (permanent, recommended)
 
-**Prerequisites:** you are logged in locally with access to Foundry (`az login`).
+**One-time infra step** (needs Owner / User Access Admin on Foundry):
 
-**1. Log in to Azure**
+```bash
+az login
+az account set --subscription "VRMS Azure DEV Subscription"
+bash deploy/grant-vm-foundry-role.sh
+```
+
+That grants **Azure AI Developer** to the VM identity `119a6e26-72c3-4852-8b69-5f1b7fdd3822`. After this, the VM obtains tokens automatically from Azure — **no access token in `.env`, no hourly redeploy**.
+
+**Deploy once** (default auth mode):
 
 ```powershell
 az login
-az account set --subscription "VRMS Azure DEV Subscription"
-```
-
-**2. Get a Foundry access token manually (optional — for inspection)**
-
-```powershell
-az account get-access-token --resource "https://ai.azure.com" -o json
-```
-
-The response includes:
-
-- `accessToken` — JWT used by the SDK
-- `expiresOn` — when it expires (~1 hour)
-
-**3. Build `.env` and deploy (recommended — script does steps 2–3 for you)**
-
-```powershell
 cd streamlit-risk-appetite-json
-
-# Writes .env with endpoint, tenant, token, expiry
-.\deploy\sync-env-from-azure.ps1 -ForVm
-
-# Syncs .env + app code to the VM and restarts the service
 .\deploy\azure-deploy.ps1
 ```
 
-`sync-env-from-azure.ps1 -ForVm` writes:
+VM `.env` (written automatically):
 
 ```env
 FOUNDRY_PROJECT_ENDPOINT=https://azr-dev-foundry-af-1617.services.ai.azure.com/api/projects/azr-dev-proj-af-1617
 FOUNDRY_AGENT_NAME=AF-UW-RiskApetite
-AZURE_TENANT_ID=<from az account show>
+AZURE_TENANT_ID=<tenant-id>
 USE_AZURE_CLI_AUTH=false
-USE_MANAGED_IDENTITY=false
-AZURE_ACCESS_TOKEN=<from az account get-access-token --resource https://ai.azure.com>
-AZURE_TOKEN_EXPIRES_ON=<unix timestamp>
+USE_MANAGED_IDENTITY=true
 ```
 
-**Token refresh:** re-run `.\deploy\azure-deploy.ps1` (or `sync-env-from-azure.ps1 -ForVm` then redeploy) before the token expires.
-
-**Local dev (no token in file):**
+**Later code updates** (auth unchanged on the VM):
 
 ```powershell
-.\deploy\sync-env-from-azure.ps1
-# or copy .env.example and set USE_AZURE_CLI_AUTH=true
-az login
-streamlit run app.py
+.\deploy\azure-deploy.ps1 -SkipEnvSync
 ```
 
-### Option B — Service principal (recommended for production)
+### Option B — Service principal in Key Vault (permanent alternative)
 
-Ask infra for an app registration with **Azure AI Developer** on Foundry, then:
+If infra prefers an app registration instead of MI on Foundry:
+
+1. Create SP with **Azure AI Developer** on Foundry.
+2. Store in Key Vault `AZR-DEV-AI-AF-RDOH-KV`:
+   - `foundry-sp-client-id`
+   - `foundry-sp-client-secret`
+3. Run:
+
+```bash
+bash deploy/grant-vm-keyvault-role.sh
+bash deploy/grant-vm-foundry-role.sh   # only if SP is not used for Foundry; skip if SP has the role
+```
+
+4. Deploy:
+
+```powershell
+.\deploy\azure-deploy.ps1 -AuthMode KeyVault
+```
+
+The app reads SP secrets from Key Vault at startup using the VM managed identity.
+
+### Option C — Service principal in `.env` (permanent)
 
 ```env
 USE_AZURE_CLI_AUTH=false
@@ -99,27 +98,30 @@ USE_MANAGED_IDENTITY=false
 AZURE_TENANT_ID=<tenant-id>
 AZURE_CLIENT_ID=<app-id>
 AZURE_CLIENT_SECRET=<secret>
-FOUNDRY_PROJECT_ENDPOINT=https://azr-dev-foundry-af-1617.services.ai.azure.com/api/projects/azr-dev-proj-af-1617
-FOUNDRY_AGENT_NAME=AF-UW-RiskApetite
 ```
 
-Redeploy: `.\deploy\azure-deploy.ps1`
+Secret does not expire until rotated — redeploy only when the secret changes.
 
-### Option C — Managed identity
+### Option D — Short-lived user token (legacy dev only)
 
-Ask infra to run (needs elevated Azure permissions):
+Only while waiting for infra to run `grant-vm-foundry-role.sh`:
 
-```bash
-bash deploy/grant-vm-foundry-role.sh
+```powershell
+.\deploy\azure-deploy.ps1 -AuthMode Token
 ```
 
-Then on the VM `.env`:
+Token expires in ~1 hour. Re-run the same command to refresh.
 
-```env
-USE_MANAGED_IDENTITY=true
-USE_AZURE_CLI_AUTH=false
-FOUNDRY_PROJECT_ENDPOINT=...
-FOUNDRY_AGENT_NAME=AF-UW-RiskApetite
+```powershell
+az account get-access-token --resource "https://ai.azure.com" -o json
+```
+
+**Local dev** (no token file):
+
+```powershell
+.\deploy\sync-env-from-azure.ps1
+az login
+streamlit run app.py
 ```
 
 ---
@@ -138,18 +140,29 @@ Creates NSG rules for **22** and **8502**, Ubuntu VM, SSH key at `~/.ssh/id_rsa`
 
 ## Deploy / update app
 
+Fast path: **one** `az vm run-command` — the VM `git pull`s from GitHub (public repo). No tar/base64 upload.
+
 ```powershell
 az login
 cd streamlit-risk-appetite-json
 .\deploy\azure-deploy.ps1
 ```
 
-`azure-deploy.ps1` automatically:
+What happens on the VM (`deploy/vm-deploy.sh`):
 
-1. Runs `sync-env-from-azure.ps1 -ForVm` to refresh `.env`
-2. Uploads app code via `az vm run-command`
-3. Uploads `.env` separately (full token preserved)
-4. Restarts `risk-appetite-streamlit`
+1. **Bootstrap once** (apt packages) — skipped on later runs
+2. **`git clone` / `git pull`** from `main`
+3. **Cached `pip install`** — skipped if `requirements.txt` hash unchanged
+4. **Writes `.env`** with `USE_MANAGED_IDENTITY=true` (no access token)
+5. **Restarts** `risk-appetite-streamlit`
+
+Code-only update (keep `.env` on VM):
+
+```powershell
+.\deploy\azure-deploy.ps1 -SkipEnvSync
+```
+
+Push to `main` before deploy so the VM pulls your latest commit.
 
 ---
 
@@ -191,9 +204,11 @@ az vm run-command invoke -g AZR-DEV-DATA-VM-RG -n VPSTREAMLIT-RISKAPP-01 \
 | File | Purpose |
 |------|---------|
 | `azure-provision.sh` | Create VM + NSG |
-| `azure-deploy.ps1` | Sync `.env`, upload app, restart service |
+| `azure-deploy.ps1` | Git-based deploy to VM (single run-command) |
+| `vm-deploy.sh` | On-VM script: clone, cache pip, write .env, restart |
 | `sync-env-from-azure.ps1` | Build `.env` from Azure CLI + Key Vault |
 | `grant-vm-foundry-role.sh` | Grant Foundry role to VM identity |
+| `grant-vm-keyvault-role.sh` | Grant Key Vault read to VM identity |
 | `configure-firewall.sh` | Enable ufw on VM |
 | `risk-appetite-streamlit.service` | systemd unit |
 | `test-connectivity.ps1` | Test ports from Windows |

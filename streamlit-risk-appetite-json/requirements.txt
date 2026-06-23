@@ -4,6 +4,7 @@ pandas
 azure-identity
 azure-ai-projects
 azure-ai-agents
+azure-keyvault-secrets
 pydantic
 tenacity
 jsonschema

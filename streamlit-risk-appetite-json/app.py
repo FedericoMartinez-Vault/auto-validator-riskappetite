@@ -327,8 +327,13 @@ def _render_analysis_error(message: str) -> bool:
         """,
         unsafe_allow_html=True,
     )
+    if "rate_limit_exceeded" in message or "Error code: 429" in message:
+        st.warning(
+            "The model deployment is temporarily rate-limited (HTTP 429). "
+            "Wait 1–2 minutes, then click **Retry analysis**."
+        )
     st.code(message, language="text")
-    return st.button("🔄 Retry analysis", type="primary", key="retry_analysis")
+    return st.button("🔄 Retry analysis", type="primary", key="retry_analysis_btn")
 
 
 def _run_agent_with_live_timer(
@@ -423,8 +428,10 @@ def get_foundry_client() -> FoundryAgentClient:
 def main() -> None:
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    if "retry_analysis" not in st.session_state:
-        st.session_state.retry_analysis = False
+    st.session_state.pop("retry_analysis", None)
+
+    if "trigger_retry" not in st.session_state:
+        st.session_state.trigger_retry = False
 
     client = None
     agent_name = st.session_state.get("agent_name", "Not connected")
@@ -474,7 +481,7 @@ def main() -> None:
 
     uploaded, analyze_main = _render_upload_hero(client_ready=client is not None)
     _render_header(agent_name)
-    analyze = analyze_sidebar or analyze_main or st.session_state.retry_analysis
+    analyze = analyze_sidebar or analyze_main or st.session_state.trigger_retry
 
     if uploaded is None:
         _render_steps(uploaded=False, has_summary=False, analyzing=False, has_result=False)
@@ -509,11 +516,11 @@ def main() -> None:
     if analyze:
         if client is None:
             st.session_state["analysis_error"] = "Foundry client is not connected. Check configuration in the sidebar."
-            st.session_state.retry_analysis = False
+            st.session_state.trigger_retry = False
             st.rerun()
 
         is_analyzing = True
-        st.session_state.retry_analysis = False
+        st.session_state.trigger_retry = False
         st.session_state.pop("analysis_error", None)
         _show_steps(analyzing=True, has_result=False)
 
@@ -567,7 +574,7 @@ def main() -> None:
 
     if st.session_state.get("analysis_error"):
         if _render_analysis_error(st.session_state["analysis_error"]):
-            st.session_state.retry_analysis = True
+            st.session_state.trigger_retry = True
             st.rerun()
 
     st.markdown("### 📊 Submission Summary")
