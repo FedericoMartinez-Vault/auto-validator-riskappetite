@@ -27,7 +27,8 @@ az account set --subscription $Subscription | Out-Null
 $tenantId = az account show --query tenantId -o tsv
 
 $skipEnvFlag = if ($SkipEnvSync) { "1" } else { "0" }
-$scriptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($VmScript)))
+$scriptContent = ([IO.File]::ReadAllText($VmScript)) -replace "`r`n", "`n" -replace "`r", "`n"
+$scriptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($scriptContent))
 
 Write-Host "Deploying branch '$Branch' to $Vm (auth: $AuthMode, single VM command)..."
 
