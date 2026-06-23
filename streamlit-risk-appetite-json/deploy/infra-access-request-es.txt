@@ -1,0 +1,17 @@
+# Mensaje para infra / Azure admin (copiar y pegar)
+
+**Asunto:** Rol Foundry para VM Streamlit Risk Appetite (DEV)
+
+Hola,
+
+Necesito que asignen el rol **Azure AI Developer** en el recurso Foundry **azr-dev-foundry-af-1617** (RG **AZR-DEV-AI-AF-RG**) a la **managed identity** de la VM **VPSTREAMLIT-RISKAPP-01**:
+
+- **Principal (object id):** `119a6e26-72c3-4852-8b69-5f1b7fdd3822`
+- **Rol:** `Azure AI Developer`
+- **Scope:** Cognitive Services account `azr-dev-foundry-af-1617`
+
+**En Portal Azure:** Foundry / Cognitive Services → `azr-dev-foundry-af-1617` → **Access control (IAM)** → **Add role assignment** → rol **Azure AI Developer** → miembro **Managed identity** → VM `VPSTREAMLIT-RISKAPP-01`.
+
+Alternativa: darme **User Access Administrator** (o permiso para crear role assignments) solo en ese recurso o RG, para auto-asignarlo.
+
+Mientras tanto uso token temporal desde mi usuario. Gracias.
