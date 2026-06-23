@@ -16,7 +16,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$AppRoot = Split-Path $PSScriptRoot -Parent
 $VmScript = Join-Path $PSScriptRoot "vm-deploy.sh"
 
 if (-not (Test-Path $VmScript)) {
@@ -30,31 +29,48 @@ $skipEnvFlag = if ($SkipEnvSync) { "1" } else { "0" }
 $scriptContent = ([IO.File]::ReadAllText($VmScript)) -replace "`r`n", "`n" -replace "`r", "`n"
 $scriptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($scriptContent))
 
-Write-Host "Deploying branch '$Branch' to $Vm (auth: $AuthMode, single VM command)..."
+$remoteLines = @(
+    "rm -f /tmp/vm-deploy.b64"
+)
+$chunkSize = 4000
+for ($i = 0; $i -lt $scriptB64.Length; $i += $chunkSize) {
+    $chunk = $scriptB64.Substring($i, [Math]::Min($chunkSize, $scriptB64.Length - $i))
+    $remoteLines += "echo '$chunk' >> /tmp/vm-deploy.b64"
+}
+$remoteLines += @(
+    "base64 -d /tmp/vm-deploy.b64 > /tmp/vm-deploy.sh",
+    "chmod +x /tmp/vm-deploy.sh",
+    "export TENANT_ID='$tenantId'",
+    "export REPO_URL='$RepoUrl'",
+    "export GIT_BRANCH='$Branch'",
+    "export SKIP_ENV='$skipEnvFlag'",
+    "export AUTH_MODE='$AuthMode'",
+    "bash /tmp/vm-deploy.sh"
+)
+$remoteScript = $remoteLines -join "`n"
 
-$result = az vm run-command invoke -g $Rg -n $Vm --command-id RunShellScript --scripts @"
-export TENANT_ID='$tenantId'
-export REPO_URL='$RepoUrl'
-export GIT_BRANCH='$Branch'
-export SKIP_ENV='$skipEnvFlag'
-export AUTH_MODE='$AuthMode'
-echo '$scriptB64' | base64 -d > /tmp/vm-deploy.sh
-chmod +x /tmp/vm-deploy.sh
-bash /tmp/vm-deploy.sh
-"@ -o json | ConvertFrom-Json
+Write-Host "Deploying branch '$Branch' to $Vm (~1 min, git pull + cached pip)..."
+
+$result = az vm run-command invoke -g $Rg -n $Vm --command-id RunShellScript --scripts $remoteScript -o json | ConvertFrom-Json
 
 $message = $result.value[0].message
-if ($message -match '\[stdout\](.*)\[stderr\]' -or $message -match '\[stdout\](.*)') {
+if ($message -match '\[stdout\]([\s\S]*?)\[stderr\]') {
     $stdout = $Matches[1].Trim()
     if ($stdout) { Write-Host $stdout }
-}
-if ($message -notmatch 'active') {
-    Write-Warning "Service may not be active. Full output:"
+    if ($message -match '\[stderr\]([\s\S]*)$') {
+        $stderr = $Matches[1].Trim()
+        if ($stderr) { Write-Host $stderr -ForegroundColor DarkYellow }
+    }
+} else {
     Write-Host $message
+}
+
+if ($message -notmatch 'active') {
+    throw "Deploy finished but service is not active. Check output above."
 }
 
 $ip = az vm show -g $Rg -n $Vm -d --query publicIps -o tsv
 Write-Host ""
 Write-Host "URL (VPN): http://10.72.128.197:8502"
 Write-Host "URL (public): http://${ip}:8502"
-Write-Host "Auth: managed identity (no access token). Infra must run grant-vm-foundry-role.sh once if not done yet."
+Write-Host "Auth: managed identity (no access token)."

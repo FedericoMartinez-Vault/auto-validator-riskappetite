@@ -28,6 +28,7 @@ fi
 
 if [[ -d "$REPO_DIR/.git" ]]; then
   log "Updating repo ($GIT_BRANCH)..."
+  sudo -u azureuser git config --global --add safe.directory "$REPO_DIR"
   sudo -u azureuser git -C "$REPO_DIR" fetch origin "$GIT_BRANCH" --depth=1
   sudo -u azureuser git -C "$REPO_DIR" checkout "$GIT_BRANCH"
   sudo -u azureuser git -C "$REPO_DIR" reset --hard "origin/$GIT_BRANCH"
@@ -35,6 +36,7 @@ else
   log "Cloning repo..."
   sudo -u azureuser rm -rf "$REPO_DIR"
   sudo -u azureuser git clone --branch "$GIT_BRANCH" --depth=1 "$REPO_URL" "$REPO_DIR"
+  sudo -u azureuser git config --global --add safe.directory "$REPO_DIR"
 fi
 
 cd "$APP_DIR"
