@@ -67,6 +67,42 @@ USE_MANAGED_IDENTITY=true
 .\deploy\azure-deploy.ps1 -SkipEnvSync
 ```
 
+### Option A2 — `az login` on the VM (your user account, no token in `.env`)
+
+Use this when infra has not granted the VM managed identity on Foundry, but **your user** already has access. One interactive login on the VM; Azure CLI refreshes tokens automatically (weeks/months, not ~1 hour).
+
+**1. Deploy with Azure CLI auth mode**
+
+```powershell
+.\deploy\azure-deploy.ps1 -AuthMode AzureCli
+```
+
+**2. SSH to the VM** (VPN) and log in **as `azureuser`** (same user as the systemd service):
+
+```bash
+ssh azureuser@20.51.166.193 -i ~/.ssh/id_rsa
+az login --use-device-code
+az account set --subscription "VRMS Azure DEV Subscription"
+sudo systemctl restart risk-appetite-streamlit
+```
+
+**3. Verify**
+
+```bash
+az account show --query "{user:user.name, subscription:name}" -o table
+```
+
+VM `.env`:
+
+```env
+USE_AZURE_CLI_AUTH=true
+USE_MANAGED_IDENTITY=false
+```
+
+Credentials live in `/home/azureuser/.azure/` (MSAL cache). No redeploy for auth until the refresh token expires or password/MFA policy forces a new login.
+
+**Caveats:** tied to your user (not ideal for production); if you leave the company, login stops working; conditional access may require re-login occasionally.
+
 ### Option B — Service principal in Key Vault (permanent alternative)
 
 If infra prefers an app registration instead of MI on Foundry:

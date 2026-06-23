@@ -4,13 +4,15 @@
 #   .\azure-deploy.ps1 -SkipEnvSync       # keep VM .env, update code only
 #   .\azure-deploy.ps1 -Branch main       # override branch
 
+#   .\azure-deploy.ps1 -AuthMode AzureCli        # use your account via az login on VM
+
 param(
     [string]$Subscription = "VRMS Azure DEV Subscription",
     [string]$Rg = "AZR-DEV-DATA-VM-RG",
     [string]$Vm = "VPSTREAMLIT-RISKAPP-01",
     [string]$RepoUrl = "https://github.com/FedericoMartinez-Vault/auto-validator-riskappetite.git",
     [string]$Branch = "main",
-    [ValidateSet("ManagedIdentity", "KeyVault")]
+    [ValidateSet("ManagedIdentity", "KeyVault", "AzureCli")]
     [string]$AuthMode = "ManagedIdentity",
     [switch]$SkipEnvSync
 )
@@ -73,4 +75,7 @@ $ip = az vm show -g $Rg -n $Vm -d --query publicIps -o tsv
 Write-Host ""
 Write-Host "URL (VPN): http://10.72.128.197:8502"
 Write-Host "URL (public): http://${ip}:8502"
-Write-Host "Auth: managed identity (no access token)."
+Write-Host "Auth: $AuthMode"
+if ($AuthMode -eq "AzureCli") {
+    Write-Host "One-time: SSH to VM as azureuser, run 'az login --use-device-code', then restart the service."
+}

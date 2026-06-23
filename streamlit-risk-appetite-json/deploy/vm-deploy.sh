@@ -28,7 +28,11 @@ if [[ ! -f "$MARKER" ]]; then
   log "First-time bootstrap: installing system packages..."
   export DEBIAN_FRONTEND=noninteractive
   sudo apt-get update -y
-  sudo apt-get install -y python3 python3-venv python3-pip git
+  sudo apt-get install -y python3 python3-venv python3-pip git curl ca-certificates apt-transport-https lsb-release gnupg
+  if ! command -v az >/dev/null 2>&1; then
+    log "Installing Azure CLI..."
+    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+  fi
   mkdir -p /home/azureuser/apps
   touch "$MARKER"
 else
@@ -69,6 +73,15 @@ fi
 if [[ "$SKIP_ENV" != "1" ]]; then
   log "Writing .env (auth: $AUTH_MODE)..."
   case "$AUTH_MODE" in
+    AzureCli)
+      cat > .env <<EOF
+FOUNDRY_PROJECT_ENDPOINT=$FOUNDRY_ENDPOINT
+FOUNDRY_AGENT_NAME=$AGENT_NAME
+AZURE_TENANT_ID=$TENANT_ID
+USE_AZURE_CLI_AUTH=true
+USE_MANAGED_IDENTITY=false
+EOF
+      ;;
     KeyVault)
       cat > .env <<EOF
 FOUNDRY_PROJECT_ENDPOINT=$FOUNDRY_ENDPOINT
@@ -109,4 +122,15 @@ sudo systemctl restart risk-appetite-streamlit
 sleep 2
 systemctl is-active risk-appetite-streamlit
 ss -tlnp | grep 8502 || true
+
+if [[ "$AUTH_MODE" == "AzureCli" ]]; then
+  if az account show >/dev/null 2>&1; then
+    log "Azure CLI session OK ($(az account show --query user.name -o tsv))."
+  else
+    log "NEXT: SSH as azureuser and run: az login --use-device-code"
+    log "     then: az account set --subscription 'VRMS Azure DEV Subscription'"
+    log "     then: sudo systemctl restart risk-appetite-streamlit"
+  fi
+fi
+
 log "Done. App at $APP_DIR"
