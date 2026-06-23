@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs on the Azure VM (invoked by azure-deploy.ps1). Fast path: git pull + cached pip.
+# Runs on the Azure VM as azureuser (invoked by azure-deploy.ps1).
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/FedericoMartinez-Vault/auto-validator-riskappetite.git}"
@@ -15,35 +15,44 @@ MARKER="/home/azureuser/.streamlit-riskapp-bootstrap"
 
 log() { echo "[vm-deploy] $*"; }
 
+if [[ "$(id -un)" != "azureuser" ]]; then
+  log "Re-running as azureuser..."
+  exec sudo -u azureuser env \
+    REPO_URL="$REPO_URL" GIT_BRANCH="$GIT_BRANCH" REPO_DIR="$REPO_DIR" APP_DIR="$APP_DIR" \
+    TENANT_ID="$TENANT_ID" SKIP_ENV="$SKIP_ENV" AUTH_MODE="$AUTH_MODE" \
+    FOUNDRY_ENDPOINT="$FOUNDRY_ENDPOINT" AGENT_NAME="$AGENT_NAME" \
+    bash "$0"
+fi
+
 if [[ ! -f "$MARKER" ]]; then
   log "First-time bootstrap: installing system packages..."
   export DEBIAN_FRONTEND=noninteractive
   sudo apt-get update -y
   sudo apt-get install -y python3 python3-venv python3-pip git
-  sudo -u azureuser mkdir -p /home/azureuser/apps
+  mkdir -p /home/azureuser/apps
   touch "$MARKER"
 else
   log "Bootstrap skipped (cached)."
 fi
 
+git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
+
 if [[ -d "$REPO_DIR/.git" ]]; then
   log "Updating repo ($GIT_BRANCH)..."
-  sudo -u azureuser git config --global --add safe.directory "$REPO_DIR"
-  sudo -u azureuser git -C "$REPO_DIR" fetch origin "$GIT_BRANCH" --depth=1
-  sudo -u azureuser git -C "$REPO_DIR" checkout "$GIT_BRANCH"
-  sudo -u azureuser git -C "$REPO_DIR" reset --hard "origin/$GIT_BRANCH"
+  git -C "$REPO_DIR" fetch origin "$GIT_BRANCH" --depth=1
+  git -C "$REPO_DIR" checkout "$GIT_BRANCH"
+  git -C "$REPO_DIR" reset --hard "origin/$GIT_BRANCH"
 else
   log "Cloning repo..."
-  sudo -u azureuser rm -rf "$REPO_DIR"
-  sudo -u azureuser git clone --branch "$GIT_BRANCH" --depth=1 "$REPO_URL" "$REPO_DIR"
-  sudo -u azureuser git config --global --add safe.directory "$REPO_DIR"
+  rm -rf "$REPO_DIR"
+  git clone --branch "$GIT_BRANCH" --depth=1 "$REPO_URL" "$REPO_DIR"
 fi
 
 cd "$APP_DIR"
 
 if [[ ! -d .venv ]]; then
   log "Creating virtualenv..."
-  sudo -u azureuser python3 -m venv .venv
+  python3 -m venv .venv
 fi
 
 REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')"
@@ -52,20 +61,16 @@ if [[ -f "$CACHE_FILE" ]] && [[ "$(cat "$CACHE_FILE")" == "$REQ_HASH" ]]; then
   log "Python deps unchanged — skipping pip install."
 else
   log "Installing Python dependencies..."
-  sudo -u azureuser .venv/bin/pip install -q --upgrade pip
-  sudo -u azureuser .venv/bin/pip install -q -r requirements.txt
-  echo "$REQ_HASH" | sudo -u azureuser tee "$CACHE_FILE" > /dev/null
+  .venv/bin/pip install -q --upgrade pip
+  .venv/bin/pip install -q -r requirements.txt
+  echo "$REQ_HASH" > "$CACHE_FILE"
 fi
 
 if [[ "$SKIP_ENV" != "1" ]]; then
   log "Writing .env (auth: $AUTH_MODE)..."
   case "$AUTH_MODE" in
-    Token)
-      log "ERROR: Token auth must be set on the VM manually; use ManagedIdentity for automated deploy."
-      exit 1
-      ;;
     KeyVault)
-      sudo -u azureuser tee .env > /dev/null <<EOF
+      cat > .env <<EOF
 FOUNDRY_PROJECT_ENDPOINT=$FOUNDRY_ENDPOINT
 FOUNDRY_AGENT_NAME=$AGENT_NAME
 AZURE_TENANT_ID=$TENANT_ID
@@ -77,7 +82,7 @@ KEY_VAULT_SP_CLIENT_SECRET_SECRET=foundry-sp-client-secret
 EOF
       ;;
     *)
-      sudo -u azureuser tee .env > /dev/null <<EOF
+      cat > .env <<EOF
 FOUNDRY_PROJECT_ENDPOINT=$FOUNDRY_ENDPOINT
 FOUNDRY_AGENT_NAME=$AGENT_NAME
 AZURE_TENANT_ID=$TENANT_ID
@@ -87,7 +92,6 @@ EOF
       ;;
   esac
   chmod 600 .env
-  chown azureuser:azureuser .env
 else
   log "Keeping existing .env (SKIP_ENV=1)."
 fi

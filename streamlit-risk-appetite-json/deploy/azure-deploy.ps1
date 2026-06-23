@@ -47,7 +47,7 @@ $remoteLines += @(
     "export AUTH_MODE='$AuthMode'",
     "bash /tmp/vm-deploy.sh"
 )
-$remoteScript = $remoteLines -join "`n"
+$remoteScript = (($remoteLines -join "; ") -replace "`r", "")
 
 Write-Host "Deploying branch '$Branch' to $Vm (~1 min, git pull + cached pip)..."
 
@@ -65,7 +65,7 @@ if ($message -match '\[stdout\]([\s\S]*?)\[stderr\]') {
     Write-Host $message
 }
 
-if ($message -notmatch 'active') {
+if ($message -notmatch '\bactive\b') {
     throw "Deploy finished but service is not active. Check output above."
 }
 
